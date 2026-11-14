@@ -1,8 +1,6 @@
-exports.handler = async (event) => {
-  return {
-    statusCode: 200,
-    body: JSON.stringify({
-      message: "Kitchen Mode extractor is working!"
-    })
-  };
-};
+const cheerio=require('cheerio');
+const clean=s=>String(s??'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
+function nodes(obj){if(!obj||typeof obj!=='object')return[];let a=[];if(Array.isArray(obj))return obj.flatMap(nodes);if(obj['@type']){const t=[].concat(obj['@type']).map(x=>String(x).toLowerCase());if(t.includes('recipe'))a.push(obj)}for(const [k,v] of Object.entries(obj)){if(k==='@context')continue;if(v&&typeof v==='object')a.push(...nodes(v))}return a}
+function instructions(v){if(!v)return[];if(typeof v==='string')return v.split(/\n\s*\n|\r?\n/).map(clean).filter(Boolean);if(Array.isArray(v))return v.flatMap(instructions);if(typeof v==='object'){if(v['@type']==='HowToSection')return instructions(v.itemListElement||v.steps);if(v.text)return[clean(v.text)];if(v.itemListElement)return instructions(v.itemListElement)}return[]}
+exports.handler=async event=>{try{const raw=event.queryStringParameters?.url;if(!raw)return{statusCode:400,body:JSON.stringify({error:'Missing URL'})};const url=new URL(raw);if(!['https:','http:'].includes(url.protocol)||url.username||url.password)return{statusCode:400,body:JSON.stringify({error:'Invalid URL'})};const host=url.hostname.toLowerCase();if(host==='localhost'||host.endsWith('.localhost')||host.endsWith('.local')||host.endsWith('.internal')||host==='0.0.0.0'||host==='127.0.0.1'||host==='::1'||/^\d+\.\d+\.\d+\.\d+$/.test(host)||host.includes(':'))return{statusCode:400,body:JSON.stringify({error:'Please use a public recipe website'})};
+const response=await fetch(url.toString(),{redirect:'follow',headers:{'User-Agent':'Mozilla/5.0 (compatible; KitchenModeRecipeReader/1.0)','Accept':'text/html'},signal:AbortSignal.timeout(12000)});if(!response.ok)throw Error('Website returned '+response.status);if(!String(response.headers.get('content-type')||'').includes('text/html'))throw Error('Link does not point to an HTML webpage');const html=await response.text();if(html.length>2500000)throw Error('Webpage is too large');const $=cheerio.load(html);let recipes=[];$('script[type="application/ld+json"]').each((_,el)=>{try{recipes.push(...nodes(JSON.parse($(el).html())))}catch(e){}});let best=recipes.map(r=>({title:clean(r.name),ingredients:(r.recipeIngredient||r.ingredients||[]).map(clean).filter(Boolean),steps:instructions(r.recipeInstructions)})).sort((a,b)=>(b.steps.length>0?1000:0)+b.ingredients.length-((a.steps.length>0?1000:0)+a.ingredients.length))[0];if(!best||!best.steps.length)throw Error('No structured recipe found on this site');return{statusCode:200,headers:{'content-type':'application/json','cache-control':'no-store'},body:JSON.stringify(best)}}catch(e){return{statusCode:422,headers:{'content-type':'application/json'},body:JSON.stringify({error:e.message||'Unable to extract recipe'})}}};
