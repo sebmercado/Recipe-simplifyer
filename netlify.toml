@@ -1,0 +1,7 @@
+[build]
+  publish = "."
+  functions = "netlify/functions"
+[[redirects]]
+  from = "/share"
+  to = "/index.html"
+  status = 200
